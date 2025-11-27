@@ -26,11 +26,16 @@ def load_models():
 
 
 @st.cache_data
-def build_question_stats(questions_df, attempts_df, le_topic, rf_clf):
+def build_question_stats():
     """
     Build per-question statistics and use the RandomForest model
     to predict difficulty from student performance data.
+
+    NOTE: No arguments here, so cache hashing is safe.
     """
+    questions_df, attempts_df, _, _ = load_data()
+    rf_clf, le_topic = load_models()
+
     q_stats = attempts_df.groupby("question_id").agg(
         avg_correct=("is_correct", "mean"),
         avg_time=("time_taken_sec", "mean")
@@ -188,10 +193,8 @@ def main():
 
     # ---- Load data and models ----
     questions_df, attempts_df, topics, difficulty_map = load_data()
-    rf_clf, le_topic = load_models()
-    question_stats_map = build_question_stats(
-        questions_df, attempts_df, le_topic, rf_clf
-    )
+    _ = load_models()  # models used inside build_question_stats
+    question_stats_map = build_question_stats()
     topic_default_diff = build_topic_default_difficulty(question_stats_map, topics)
 
     # ---- Sidebar: configuration ----
@@ -212,9 +215,10 @@ def main():
         init_session_state(topics, topic_default_diff, num_questions, student_id)
         # first question
         q = pick_question(questions_df, topics, difficulty_map)
-        st.session_state.current_question = q
-        st.session_state.asked_qids.add(int(q["question_id"]))
-        st.session_state.start_time = time.time()
+        if q is not None:
+            st.session_state.current_question = q
+            st.session_state.asked_qids.add(int(q["question_id"]))
+            st.session_state.start_time = time.time()
 
     # If not initialized or no current question yet, show info
     if not st.session_state.initialized or st.session_state.current_question is None:
@@ -234,7 +238,6 @@ def main():
         else:
             st.write("No responses recorded.")
 
-        # Optional: Show raw responses
         with st.expander("Show detailed responses"):
             st.dataframe(pd.DataFrame(st.session_state.responses))
 
@@ -312,7 +315,7 @@ def main():
 
         if st.session_state.current_index >= st.session_state.num_questions:
             st.session_state.quiz_finished = True
-            st.experimental_rerun()
+            st.rerun()
         else:
             # pick next question
             q_next = pick_question(questions_df, topics, difficulty_map)
@@ -322,8 +325,9 @@ def main():
                 st.session_state.current_question = q_next
                 st.session_state.asked_qids.add(int(q_next["question_id"]))
                 st.session_state.start_time = time.time()
-            st.experimental_rerun()
+            st.rerun()
 
 
 if __name__ == "__main__":
     main()
+
