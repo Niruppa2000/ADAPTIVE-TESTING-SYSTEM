@@ -11,15 +11,32 @@ import joblib
 
 @st.cache_data
 def load_data():
+    """
+    Load questions and attempts generated from the NCERT pipeline.
+    Assumes:
+      - questions.csv has at least:
+          question_id, topic, question_text,
+          option_A, option_B, option_C, option_D, correct_option,
+          difficulty_level
+      - attempts.csv has:
+          student_id, question_id, topic, difficulty_level,
+          is_correct, time_taken_sec
+    """
     questions = pd.read_csv("questions.csv")
     attempts = pd.read_csv("attempts.csv")
+
+    # Topics are things like "Algebra - Class 8", "Geometry - Class 7", etc.
     topics = sorted(questions["topic"].unique().tolist())
     difficulty_map = {1: "Easy", 2: "Medium", 3: "Hard"}
+
     return questions, attempts, topics, difficulty_map
 
 
 @st.cache_resource
 def load_models():
+    """
+    Load the RandomForest difficulty model and LabelEncoder for topics.
+    """
     rf_clf = joblib.load("models/difficulty_model.pkl")
     le_topic = joblib.load("models/topic_label_encoder.pkl")
     return rf_clf, le_topic
@@ -31,11 +48,13 @@ def build_question_stats():
     Build per-question statistics and use the RandomForest model
     to predict difficulty from student performance data.
 
-    NOTE: No arguments here, so cache hashing is safe.
+    This function does not take arguments to avoid Streamlit's
+    UnhashableParamError in caching.
     """
     questions_df, attempts_df, _, _ = load_data()
     rf_clf, le_topic = load_models()
 
+    # Aggregate per question
     q_stats = attempts_df.groupby("question_id").agg(
         avg_correct=("is_correct", "mean"),
         avg_time=("time_taken_sec", "mean")
@@ -52,7 +71,7 @@ def build_question_stats():
     X = q_stats[["avg_correct", "avg_time", "topic_encoded"]]
     q_stats["predicted_difficulty"] = rf_clf.predict(X)
 
-    # build a lookup dict
+    # Build a lookup dict: question_id -> stats
     q_map = {}
     for _, row in q_stats.iterrows():
         q_map[int(row["question_id"])] = {
@@ -87,22 +106,31 @@ def init_session_state(topics, topic_default_diff, num_questions, student_id):
 def pick_topic(topics):
     """
     If no responses yet -> random topic.
-    Else -> choose weakest topic (lowest accuracy).
+    Else -> choose randomly among the 2 weakest topics so far.
+    This avoids over-focusing on just one topic.
     """
     if not st.session_state.responses:
         return random.choice(topics)
+
     df = pd.DataFrame(st.session_state.responses)
     topic_perf = df.groupby("topic")["is_correct"].mean().to_dict()
 
-    # fill missing topics as strong
+    # Fill missing topics as strong (accuracy = 1.0)
     for t in topics:
         topic_perf.setdefault(t, 1.0)
 
-    # weakest topic first
-    return min(topic_perf, key=topic_perf.get)
+    # Sort by accuracy (ascending) and randomly pick among the 2 weakest
+    weakest_two = sorted(topic_perf, key=topic_perf.get)[:2]
+    return random.choice(weakest_two)
 
 
 def pick_question(questions_df, topics, difficulty_map):
+    """
+    Pick the next question using:
+      - Weakest topic (from pick_topic)
+      - Current difficulty level for that topic
+      - Avoid already asked question_ids
+    """
     topic = pick_topic(topics)
     desired_diff = st.session_state.topic_difficulty.get(topic, 2)
 
@@ -113,6 +141,7 @@ def pick_question(questions_df, topics, difficulty_map):
     ]
 
     if pool.empty:
+        # fallback: any difficulty in this topic not yet asked
         pool = questions_df[
             (questions_df["topic"] == topic) &
             (~questions_df["question_id"].isin(st.session_state.asked_qids))
@@ -128,8 +157,8 @@ def pick_question(questions_df, topics, difficulty_map):
 def update_difficulty(topic, is_correct, time_taken, difficulty_level):
     """
     Simple rule-based adaptation:
-    - If correct & fast -> increase difficulty up to 3
-    - If wrong -> decrease difficulty down to 1
+      - If correct & fast -> increase difficulty up to 3
+      - If wrong -> decrease difficulty down to 1
     """
     cur = st.session_state.topic_difficulty.get(topic, 2)
     if is_correct and time_taken < 45 and difficulty_level < 3:
@@ -148,7 +177,7 @@ def build_topic_default_difficulty(question_stats_map, topics):
     for t in topics:
         preds = [
             v["predicted_difficulty"]
-            for k, v in question_stats_map.items()
+            for _, v in question_stats_map.items()
             if v["topic"] == t
         ]
         if preds:
@@ -159,6 +188,10 @@ def build_topic_default_difficulty(question_stats_map, topics):
 
 
 def knowledge_gap_summary():
+    """
+    Aggregate accuracy per topic based on recorded responses.
+    Topic is something like "Algebra - Class 8".
+    """
     df = pd.DataFrame(st.session_state.responses)
     if df.empty:
         return []
@@ -173,6 +206,9 @@ def knowledge_gap_summary():
         else:
             status = "Weak"
         summary.append((topic, round(acc * 100, 1), status))
+
+    # Sort by weakest first
+    summary.sort(key=lambda x: x[1])
     return summary
 
 
@@ -181,19 +217,20 @@ def knowledge_gap_summary():
 # ======================
 
 def main():
-    st.set_page_config(page_title="AI Adaptive Testing System", layout="centered")
+    st.set_page_config(page_title="AI Adaptive Maths Testing", layout="centered")
 
-    st.title("🧠 AI-Powered Adaptive Testing System")
+    st.title("🧠 AI-Powered Adaptive Maths Testing System")
     st.write(
         """
-        This app adjusts question difficulty in real-time based on your answers,
-        and provides topic-wise knowledge gap analysis at the end.
+        This app uses NCERT-based questions (Classes 6–10) and adjusts
+        question difficulty and topics (Algebra, Geometry, Arithmetic, etc.)
+        in real time based on your performance.
         """
     )
 
     # ---- Load data and models ----
     questions_df, attempts_df, topics, difficulty_map = load_data()
-    _ = load_models()  # models used inside build_question_stats
+    _ = load_models()  # ensures models are loaded for build_question_stats
     question_stats_map = build_question_stats()
     topic_default_diff = build_topic_default_difficulty(question_stats_map, topics)
 
@@ -203,7 +240,7 @@ def main():
     num_questions = st.sidebar.number_input(
         "Number of questions",
         min_value=3,
-        max_value=30,
+        max_value=40,
         value=10,
         step=1,
     )
@@ -213,7 +250,7 @@ def main():
 
     if st.sidebar.button("🔁 Start / Restart Test"):
         init_session_state(topics, topic_default_diff, num_questions, student_id)
-        # first question
+        # pick the first question immediately
         q = pick_question(questions_df, topics, difficulty_map)
         if q is not None:
             st.session_state.current_question = q
@@ -228,12 +265,16 @@ def main():
     # ---- If quiz finished, show summary ----
     if st.session_state.quiz_finished:
         st.success("Test completed! 🎉")
-        st.write(f"**Final Score:** {st.session_state.correct_count} / {st.session_state.num_questions}")
+        st.write(
+            f"**Final Score:** {st.session_state.correct_count} / "
+            f"{st.session_state.num_questions}"
+        )
 
         summary = knowledge_gap_summary()
         st.subheader("📊 Knowledge Gap Analysis (Topic-wise Accuracy)")
         if summary:
             for topic, acc, status in summary:
+                # topic looks like "Algebra - Class 8"
                 st.write(f"- **{topic}**: {acc}% ({status})")
         else:
             st.write("No responses recorded.")
@@ -246,22 +287,33 @@ def main():
     # ---- Display current question ----
     q = st.session_state.current_question
     qid = int(q["question_id"])
-    topic = q["topic"]
+    topic_str = q["topic"]
     diff_level = int(q["difficulty_level"])
-    diff_label = difficulty_map[diff_level]
+    diff_label = difficulty_map.get(diff_level, str(diff_level))
+
+    # Try to split topic into subtopic + class for nicer display
+    if " - " in topic_str:
+        subtopic, class_name = topic_str.split(" - ", 1)
+    else:
+        subtopic, class_name = topic_str, ""
 
     st.markdown(f"**Student:** `{st.session_state.student_id}`")
     st.markdown(
-        f"**Question {st.session_state.current_index + 1} / {st.session_state.num_questions}**"
+        f"**Question {st.session_state.current_index + 1} / "
+        f"{st.session_state.num_questions}**"
     )
-    st.markdown(f"**Topic:** {topic} | **Difficulty:** {diff_label}")
+    st.markdown(
+        f"**Subtopic:** {subtopic} &nbsp;&nbsp; "
+        f"**{class_name}** &nbsp;&nbsp; "
+        f"**Difficulty:** {diff_label}"
+    )
 
-    # show model-predicted difficulty for information (optional)
-    q_stats = question_stats_map.get(qid)
-    if q_stats is not None:
+    # Show model-predicted difficulty info (optional)
+    question_stats = question_stats_map.get(qid)
+    if question_stats is not None:
         st.caption(
-            f"Model-predicted difficulty level (from past data): "
-            f"{q_stats['predicted_difficulty']}"
+            "Model-predicted difficulty (from past data): "
+            f"Level {question_stats['predicted_difficulty']}"
         )
 
     st.write("---")
@@ -299,7 +351,7 @@ def main():
         st.session_state.responses.append(
             {
                 "question_id": qid,
-                "topic": topic,
+                "topic": topic_str,
                 "difficulty_level": diff_level,
                 "selected_option": answer,
                 "correct_option": q["correct_option"],
@@ -309,7 +361,7 @@ def main():
         )
 
         # update difficulty for this topic
-        update_difficulty(topic, is_correct, time_taken, diff_level)
+        update_difficulty(topic_str, is_correct, time_taken, diff_level)
 
         st.session_state.current_index += 1
 
