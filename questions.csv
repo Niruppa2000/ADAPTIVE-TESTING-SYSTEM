@@ -1,0 +1,91 @@
+question_id,topic,difficulty_level,difficulty_label,question_text,option_A,option_B,option_C,option_D,correct_option
+1,Algebra,1,Easy,What is 7 + 4?,8,12,17,11,D
+2,Algebra,1,Easy,What is 8 + 5?,19,11,13,16,C
+3,Algebra,1,Easy,What is 7 + 8?,16,20,12,15,D
+4,Algebra,1,Easy,What is 5 + 2?,9,5,7,12,C
+5,Algebra,1,Easy,What is 5 + 1?,8,4,10,6,D
+6,Algebra,1,Easy,What is 9 + 1?,13,16,7,10,D
+7,Algebra,1,Easy,What is 10 + 3?,12,16,13,19,C
+8,Algebra,1,Easy,What is 5 + 3?,11,12,8,7,C
+9,Algebra,1,Easy,What is 7 + 2?,9,7,10,14,A
+10,Algebra,1,Easy,What is 10 + 9?,18,24,19,21,C
+11,Algebra,2,Medium,What is 29 + 37?,63,69,73,66,D
+12,Algebra,2,Medium,What is 17 + 44?,68,60,63,61,D
+13,Algebra,2,Medium,What is 49 + 13?,67,64,62,60,C
+14,Algebra,2,Medium,What is 13 + 38?,49,56,54,51,D
+15,Algebra,2,Medium,What is 43 + 19?,62,64,68,60,A
+16,Algebra,2,Medium,What is 24 + 17?,48,41,38,43,B
+17,Algebra,2,Medium,What is 49 + 30?,80,85,77,79,D
+18,Algebra,2,Medium,What is 33 + 35?,69,72,68,67,C
+19,Algebra,2,Medium,What is 38 + 24?,66,61,63,62,D
+20,Algebra,2,Medium,What is 16 + 18?,34,35,31,40,A
+21,Algebra,3,Hard,What is -13 + 14?,1,0,7,4,A
+22,Algebra,3,Hard,What is -16 + 20?,4,11,3,7,A
+23,Algebra,3,Hard,What is -9 + 13?,5,10,1,4,D
+24,Algebra,3,Hard,What is 41 + 16?,55,63,57,60,C
+25,Algebra,3,Hard,What is 14 + 44?,57,58,61,64,B
+26,Algebra,3,Hard,What is -18 + -20?,-37,-32,-38,-40,C
+27,Algebra,3,Hard,What is -7 + 6?,5,-4,0,-1,D
+28,Algebra,3,Hard,What is 21 + 30?,54,55,51,48,C
+29,Algebra,3,Hard,What is 31 + -17?,20,16,14,13,C
+30,Algebra,3,Hard,What is -6 + 22?,16,17,15,23,A
+31,Geometry,1,Easy,What is 7 × 3?,16,21,28,24,B
+32,Geometry,1,Easy,What is 10 × 9?,90,99,87,92,A
+33,Geometry,1,Easy,What is 4 × 10?,40,44,35,46,A
+34,Geometry,1,Easy,What is 7 × 1?,9,15,7,5,C
+35,Geometry,1,Easy,What is 9 × 4?,38,34,36,44,C
+36,Geometry,1,Easy,What is 7 × 6?,47,38,48,42,D
+37,Geometry,1,Easy,What is 5 × 1?,9,5,2,14,B
+38,Geometry,1,Easy,What is 8 × 6?,48,43,53,54,A
+39,Geometry,1,Easy,What is 4 × 1?,7,4,11,2,B
+40,Geometry,1,Easy,What is 4 × 7?,34,31,24,28,D
+41,Geometry,2,Medium,What is 9 × 5?,53,50,45,43,C
+42,Geometry,2,Medium,What is 5 × 6?,25,33,30,41,C
+43,Geometry,2,Medium,What is 11 × 9?,105,104,97,99,D
+44,Geometry,2,Medium,What is 7 × 18?,135,126,124,129,B
+45,Geometry,2,Medium,What is 14 × 20?,283,280,289,275,B
+46,Geometry,2,Medium,What is 11 × 15?,161,165,171,170,B
+47,Geometry,2,Medium,What is 19 × 10?,199,195,188,190,D
+48,Geometry,2,Medium,What is 6 × 10?,63,56,60,66,C
+49,Geometry,2,Medium,What is 13 × 16?,218,208,212,205,B
+50,Geometry,2,Medium,What is 7 × 8?,61,52,65,56,D
+51,Geometry,3,Hard,What is 28 × 12?,345,340,332,336,D
+52,Geometry,3,Hard,What is 16 × 29?,466,471,462,464,D
+53,Geometry,3,Hard,What is 17 × 10?,170,176,165,174,A
+54,Geometry,3,Hard,What is 27 × 19?,513,509,522,517,A
+55,Geometry,3,Hard,What is 25 × 25?,634,625,620,627,B
+56,Geometry,3,Hard,What is 26 × 11?,286,297,288,281,A
+57,Geometry,3,Hard,What is 21 × 14?,294,296,289,302,A
+58,Geometry,3,Hard,What is 18 × 18?,328,320,332,324,D
+59,Geometry,3,Hard,What is 29 × 10?,285,298,295,290,D
+60,Geometry,3,Hard,What is 26 × 17?,451,442,439,447,B
+61,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+62,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+63,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+64,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+65,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+66,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+67,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+68,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+69,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+70,Probability,1,Easy,A coin is tossed once. What is the probability of getting Heads?,1/2,1/3,1/4,2/3,A
+71,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+72,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+73,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+74,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+75,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+76,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+77,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+78,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+79,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+80,Probability,2,Medium,A die is rolled once. What is the probability of getting an even number?,1/2,1/3,2/3,1/6,A
+81,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+82,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+83,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+84,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+85,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+86,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+87,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+88,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+89,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
+90,Probability,3,Hard,Two fair coins are tossed. What is the probability that exactly one of them shows Heads?,1/4,1/2,3/4,1/3,B
