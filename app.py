@@ -22,6 +22,17 @@ sia = SentimentIntensityAnalyzer()
 def load_data():
     """
     Load questions.csv and attempts.csv.
+
+    questions.csv MUST have:
+      - question_id
+      - topic
+      - difficulty_level
+      - question_text
+      - option_A, option_B, option_C, option_D
+      - correct_option
+
+    It MAY optionally have:
+      - source_paragraph  (NCERT text the question comes from)
     """
     questions = pd.read_csv("questions.csv")
     attempts = pd.read_csv("attempts.csv")
@@ -34,9 +45,7 @@ def load_data():
 
 @st.cache_resource
 def load_models():
-    """
-    Load RandomForest difficulty model and LabelEncoder.
-    """
+    """Load RandomForest difficulty model + topic LabelEncoder."""
     rf_clf = joblib.load("models/difficulty_model.pkl")
     le_topic = joblib.load("models/topic_label_encoder.pkl")
     return rf_clf, le_topic
@@ -45,25 +54,24 @@ def load_models():
 @st.cache_data
 def build_question_stats():
     """
-    Build average correctness/time per question and get predicted difficulty
-    using the RandomForest model.
+    Build per-question stats (accuracy, time) and predicted difficulty
+    from the RandomForest model.
     """
     questions_df, attempts_df, _, _ = load_data()
     rf_clf, le_topic = load_models()
 
     q_stats = attempts_df.groupby("question_id").agg(
         avg_correct=("is_correct", "mean"),
-        avg_time=("time_taken_sec", "mean")
+        avg_time=("time_taken_sec", "mean"),
     ).reset_index()
 
     q_stats = q_stats.merge(
         questions_df[["question_id", "topic"]],
         on="question_id",
-        how="left"
+        how="left",
     )
 
     q_stats["topic_encoded"] = le_topic.transform(q_stats["topic"])
-
     X = q_stats[["avg_correct", "avg_time", "topic_encoded"]]
     q_stats["predicted_difficulty"] = rf_clf.predict(X)
 
@@ -74,7 +82,7 @@ def build_question_stats():
             "avg_time": float(row["avg_time"]),
             "topic": row["topic"],
             "topic_encoded": int(row["topic_encoded"]),
-            "predicted_difficulty": int(row["predicted_difficulty"])
+            "predicted_difficulty": int(row["predicted_difficulty"]),
         }
     return result
 
@@ -95,19 +103,17 @@ def init_session(topics, starting_difficulties, total_questions, student_id):
     st.session_state.start_time = None
     st.session_state.initialized = True
 
+    # per-topic difficulty: 1=Easy, 2=Medium, 3=Hard
     st.session_state.topic_difficulty = dict(starting_difficulties)
 
 
 def pick_topic(topics):
-    """
-    Prefer weakest topic so far, else random.
-    """
+    """Pick weakest topic so far; if none yet, random."""
     if not st.session_state.responses:
         return random.choice(topics)
 
     df = pd.DataFrame(st.session_state.responses)
     topic_perf = df.groupby("topic")["is_correct"].mean().to_dict()
-
     for t in topics:
         topic_perf.setdefault(t, 1.0)
 
@@ -116,22 +122,20 @@ def pick_topic(topics):
 
 
 def pick_question(questions_df, topics):
-    """
-    Pick a question from chosen topic with desired difficulty.
-    """
+    """Pick a new question by topic + difficulty, avoiding repeats."""
     topic = pick_topic(topics)
     desired_diff = st.session_state.topic_difficulty.get(topic, 2)
 
     pool = questions_df[
-        (questions_df["topic"] == topic) &
-        (questions_df["difficulty_level"] == desired_diff) &
-        (~questions_df["question_id"].isin(st.session_state.asked_qids))
+        (questions_df["topic"] == topic)
+        & (questions_df["difficulty_level"] == desired_diff)
+        & (~questions_df["question_id"].isin(st.session_state.asked_qids))
     ]
 
     if pool.empty:
         pool = questions_df[
-            (questions_df["topic"] == topic) &
-            (~questions_df["question_id"].isin(st.session_state.asked_qids))
+            (questions_df["topic"] == topic)
+            & (~questions_df["question_id"].isin(st.session_state.asked_qids))
         ]
 
     if pool.empty:
@@ -141,29 +145,13 @@ def pick_question(questions_df, topics):
     return row
 
 
-def update_difficulty(topic, is_correct, time_taken, difficulty_level, sentiment_simple):
-    cur = st.session_state.topic_difficulty.get(topic, 2)
-
-    if is_correct:
-        if sentiment_simple == "positive" and time_taken < 45:
-            cur = min(3, cur + 1)
-        elif sentiment_simple == "neutral":
-            if random.random() < 0.4:
-                cur = min(3, cur + 1)
-    else:
-        cur = max(1, cur - 1)
-
-    st.session_state.topic_difficulty[topic] = cur
-
-
-def interpret_sentiment(feedback_text):
-    """Use VADER sentiment analysis."""
+def interpret_sentiment(feedback_text: str) -> str:
+    """Use NLTK VADER to classify feedback as positive / negative / neutral."""
     if not feedback_text.strip():
         return "neutral"
 
-    score = sia.polarity_scores(feedback_text)
-    comp = score["compound"]
-
+    scores = sia.polarity_scores(feedback_text)
+    comp = scores["compound"]
     if comp >= 0.5:
         return "positive"
     elif comp <= -0.3:
@@ -172,22 +160,45 @@ def interpret_sentiment(feedback_text):
         return "neutral"
 
 
+def update_difficulty(topic, is_correct, time_taken, difficulty_level, sentiment_simple):
+    """
+    Adapt difficulty based on:
+      - correctness
+      - speed
+      - sentiment
+    """
+    cur = st.session_state.topic_difficulty.get(topic, 2)
+
+    if is_correct:
+        if sentiment_simple == "positive" and time_taken < 45:
+            cur = min(3, cur + 1)
+        elif sentiment_simple == "neutral":
+            if random.random() < 0.4:
+                cur = min(3, cur + 1)
+        else:
+            # negative but correct -> keep
+            cur = cur
+    else:
+        cur = max(1, cur - 1)
+
+    st.session_state.topic_difficulty[topic] = cur
+
+
 def compute_knowledge_gaps():
     df = pd.DataFrame(st.session_state.responses)
     if df.empty:
         return []
 
     topic_perf = df.groupby("topic")["is_correct"].mean().to_dict()
-
     summary = []
-    for topic, acc in topic_perf.items():
+    for t, acc in topic_perf.items():
         if acc >= 0.7:
             status = "Strong"
         elif acc >= 0.4:
             status = "Moderate"
         else:
             status = "Weak"
-        summary.append((topic, round(acc * 100, 1), status))
+        summary.append((t, round(acc * 100, 1), status))
 
     summary.sort(key=lambda x: x[1])
     return summary
@@ -201,10 +212,7 @@ def starting_difficulty_map(q_stats_map, topics):
             for _, v in q_stats_map.items()
             if v["topic"] == t
         ]
-        if preds:
-            d[t] = int(np.mean(preds))
-        else:
-            d[t] = 2
+        d[t] = int(np.mean(preds)) if preds else 2
     return d
 
 
@@ -218,11 +226,11 @@ def main():
     st.title("📘 NCERT Maths – Adaptive Learning System")
     st.write(
         """
-        This AI tutor generates maths questions from **NCERT Class 6–10**
-        and adapts based on:
-        - Your performance  
-        - Your speed  
-        - Your feedback sentiment  
+        This AI tutor uses **NCERT Class 6–10** maths content, and:
+        - Generates practice questions
+        - Adapts difficulty per topic
+        - Uses your feedback sentiment to tune future questions
+        - Provides topic-wise knowledge gap analysis
         """
     )
 
@@ -230,12 +238,13 @@ def main():
     q_stats_map = build_question_stats()
     topic_start_diff = starting_difficulty_map(q_stats_map, topics)
 
-    # Sidebar
+    # Sidebar controls
     st.sidebar.header("Settings")
     student_id = st.sidebar.text_input("Student ID", "student1")
     total_questions = st.sidebar.number_input(
         "Number of Questions", min_value=3, max_value=50, value=10
     )
+    debug_mode = st.sidebar.checkbox("Enable debug mode (show NCERT source)")
 
     if "initialized" not in st.session_state:
         init_session(topics, topic_start_diff, total_questions, student_id)
@@ -248,13 +257,11 @@ def main():
             st.session_state.asked_qids.add(int(first_q["question_id"]))
             st.session_state.start_time = time.time()
 
-    if (
-        not st.session_state.initialized
-        or st.session_state.current_question is None
-    ):
+    if not st.session_state.initialized or st.session_state.current_question is None:
         st.info("Click **Start / Restart Test** to begin.")
         return
 
+    # If finished, show summary
     if st.session_state.quiz_finished:
         st.success("🎉 Test Completed!")
         st.write(
@@ -268,15 +275,13 @@ def main():
             for topic, acc, status in gaps:
                 st.write(f"- **{topic}**: {acc}% ({status})")
         else:
-            st.write("No data available.")
+            st.write("No responses yet.")
 
-        st.write("### Detailed Responses")
-        st.dataframe(pd.DataFrame(st.session_state.responses))
+        with st.expander("Show detailed responses"):
+            st.dataframe(pd.DataFrame(st.session_state.responses))
         return
 
-    # ---------------------------------
-    # Show Current Question
-    # ---------------------------------
+    # ----- Current Question -----
     q = st.session_state.current_question
     qid = int(q["question_id"])
 
@@ -291,8 +296,18 @@ def main():
     st.markdown(f"**Topic:** {topic_str}")
     st.markdown(f"**Difficulty:** {diff_label}")
     st.write("---")
-
     st.write(q["question_text"])
+
+    # 🔍 Debug section with source paragraph
+    if debug_mode:
+        with st.expander("🔎 Debug / NCERT Source"):
+            st.write(f"**Question ID:** {qid}")
+            st.write(f"**Raw topic key:** {topic_str}")
+            if "source_paragraph" in q.index:
+                st.markdown("**Source paragraph from NCERT:**")
+                st.write(q["source_paragraph"])
+            else:
+                st.write("_No source_paragraph column found in questions.csv_")
 
     options = {
         "A": q["option_A"],
@@ -310,7 +325,7 @@ def main():
     )
 
     feedback = st.text_input(
-        "Optional: Tell us how this question felt (easy, confusing, hard, etc.):",
+        "Optional: How did this question feel? (easy, confusing, hard, etc.)",
         key=f"feed_{qid}_{st.session_state.current_index}",
     )
 
@@ -320,14 +335,13 @@ def main():
 
         is_correct = int(answer == q["correct_option"])
         if is_correct:
-            st.success("Correct!")
+            st.success("✅ Correct!")
             st.session_state.correct_count += 1
         else:
-            st.error(f"Incorrect. Correct answer: **{q['correct_option']}**")
+            st.error(f"❌ Incorrect. Correct answer: **{q['correct_option']}**")
 
         sentiment_simple = interpret_sentiment(feedback)
 
-        # Save response
         st.session_state.responses.append(
             {
                 "question_id": qid,
@@ -342,12 +356,9 @@ def main():
             }
         )
 
-        # Update adaptive difficulty
         update_difficulty(topic_str, is_correct, time_taken, diff_level, sentiment_simple)
 
-        # Move to next question
         st.session_state.current_index += 1
-
         if st.session_state.current_index >= st.session_state.total_questions:
             st.session_state.quiz_finished = True
             st.rerun()
