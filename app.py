@@ -172,9 +172,7 @@ def main():
     st.write(
         """
         This tutor uses **NCERT History / Civics** textbooks to generate
-        **WH questions** (who / what / when / where / why / how / which) and
-        adapts difficulty based on your performance and feedback.
-        """
+        **WH questions**."""
     )
 
     questions_df, attempts_df, topics, difficulty_map = load_data()
@@ -319,4 +317,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
