@@ -1,16 +1,19 @@
+import os
+from pathlib import Path
+
 import streamlit as st
 import pandas as pd
 import numpy as np
 from sentence_transformers import SentenceTransformer
 import joblib
-from pathlib import Path
+
 
 # ---------- PATHS ----------
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "models"
 
-SBERT_PATH = MODEL_DIR / "sbert_qg"
+SBERT_PATH = MODEL_DIR / "sbert_qg"              # fine-tuned model folder
 DIFF_MODEL_PATH = MODEL_DIR / "difficulty_clf.joblib"
 QUESTION_BANK_PATH = DATA_DIR / "question_bank.parquet"
 
@@ -22,14 +25,33 @@ INV_DIFF_MAP = {v: k for k, v in DIFF_MAP.items()}
 
 @st.cache_resource
 def load_sbert():
-    """Load fine-tuned Sentence-BERT model (once)."""
-    model = SentenceTransformer(str(SBERT_PATH))
+    """
+    Load fine-tuned Sentence-BERT if present.
+    If not found, fall back to base 'all-MiniLM-L6-v2' model
+    so the app still works.
+    """
+    if SBERT_PATH.exists() and any(SBERT_PATH.iterdir()):
+        st.info(f"Loading fine-tuned SBERT from `{SBERT_PATH}`")
+        model = SentenceTransformer(str(SBERT_PATH), local_files_only=True)
+    else:
+        st.warning(
+            f"Fine-tuned model folder not found at `{SBERT_PATH}`.\n\n"
+            "Using base Sentence-BERT model `sentence-transformers/all-MiniLM-L6-v2` instead. "
+            "For best results, upload your fine-tuned model folder to `models/sbert_qg/`."
+        )
+        model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
     return model
 
 
 @st.cache_resource
 def load_difficulty_model():
     """Load difficulty classifier (RandomForest)."""
+    if not DIFF_MODEL_PATH.exists():
+        st.warning(
+            f"Difficulty model not found at `{DIFF_MODEL_PATH}`.\n"
+            "Difficulty prediction will be disabled."
+        )
+        return None
     clf = joblib.load(DIFF_MODEL_PATH)
     return clf
 
@@ -37,21 +59,26 @@ def load_difficulty_model():
 @st.cache_resource
 def load_question_bank_and_embeddings():
     """
-    Load question bank and pre-compute embeddings for each question
-    (for difficulty prediction / similarity if needed).
+    Load question bank and pre-compute embeddings for each question.
+    Stop with a clear error if the file is missing.
     """
-    if QUESTION_BANK_PATH.suffix == ".parquet":
-        df = pd.read_parquet(QUESTION_BANK_PATH)
-    else:
-        df = pd.read_csv(QUESTION_BANK_PATH)
+    if not QUESTION_BANK_PATH.exists():
+        st.error(
+            f"`question_bank.parquet` not found at `{QUESTION_BANK_PATH}`.\n\n"
+            "Make sure you have copied this file from Colab into the `data/` folder "
+            "in your Streamlit repo."
+        )
+        st.stop()
 
-    # Ensure difficulty id
+    df = pd.read_parquet(QUESTION_BANK_PATH)
+
     if "difficulty" not in df.columns:
-        raise ValueError("question_bank must contain 'difficulty' column.")
+        st.error("`question_bank.parquet` must contain a 'difficulty' column.")
+        st.stop()
+
     df["diff_id"] = df["difficulty"].map(DIFF_MAP)
 
     sbert = load_sbert()
-    # Precompute question embeddings once
     q_embs = sbert.encode(
         df["question"].tolist(),
         batch_size=64,
@@ -65,7 +92,6 @@ def load_question_bank_and_embeddings():
 # ---------- ADAPTIVE LOGIC ----------
 
 def choose_initial_question(df: pd.DataFrame, class_level: int, asked_ids):
-    """Start from medium difficulty question."""
     candidates = df[df["difficulty"] == "medium"]
     candidates = candidates[~candidates.index.isin(asked_ids)]
     if candidates.empty:
@@ -75,11 +101,6 @@ def choose_initial_question(df: pd.DataFrame, class_level: int, asked_ids):
 
 
 def choose_next_question(df: pd.DataFrame, prev_correct: bool, prev_diff_id: int, asked_ids):
-    """
-    Adaptive rule:
-    - correct  -> difficulty same or +1
-    - incorrect-> difficulty same or -1
-    """
     if prev_correct:
         target_diff = min(prev_diff_id + 1, 2)
     else:
@@ -96,13 +117,8 @@ def choose_next_question(df: pd.DataFrame, prev_correct: bool, prev_diff_id: int
 
 
 def evaluate_answer(student_answer: str, correct_answer: str, sbert: SentenceTransformer, threshold: float = 0.6):
-    """
-    Semantic similarity scoring using SBERT.
-    Returns (bool_is_correct, similarity_score).
-    """
     emb_student = sbert.encode([student_answer], convert_to_numpy=True)[0]
     emb_correct = sbert.encode([correct_answer], convert_to_numpy=True)[0]
-
     sim = np.dot(emb_student, emb_correct) / (
         np.linalg.norm(emb_student) * np.linalg.norm(emb_correct) + 1e-8
     )
@@ -110,14 +126,15 @@ def evaluate_answer(student_answer: str, correct_answer: str, sbert: SentenceTra
     return is_correct, float(sim)
 
 
-def predict_difficulty(question: str, sbert: SentenceTransformer, clf) -> str:
-    """Predict difficulty of a custom question typed by user."""
+def predict_difficulty(question: str, sbert: SentenceTransformer, clf):
+    if clf is None:
+        return "unknown"
     emb = sbert.encode([question], convert_to_numpy=True)
     pred_id = int(clf.predict(emb)[0])
     return INV_DIFF_MAP.get(pred_id, "unknown")
 
 
-# ---------- UI HELPERS ----------
+# ---------- SESSION HELPERS ----------
 
 def init_session_state():
     if "initialized" not in st.session_state:
@@ -130,7 +147,7 @@ def init_session_state():
         st.session_state.score = 0
         st.session_state.num_attempted = 0
         st.session_state.asked_ids = []
-        st.session_state.history = []  # list of dicts
+        st.session_state.history = []
         st.session_state.test_started = False
         st.session_state.test_finished = False
 
@@ -167,31 +184,21 @@ def main():
 
     st.title("📚 AI-Powered Adaptive Testing System (NCERT Social Science)")
     st.write(
-        "This app uses a fine-tuned **Sentence-BERT** model and a question "
-        "bank generated from NCERT Social Science textbooks (Class 6–12). "
-        "It adapts question difficulty based on your performance in real time."
+        "This app uses a Sentence-BERT model and a question bank generated "
+        "from NCERT Social Science textbooks (Class 6–12). "
+        "It adapts question difficulty in real time based on your answers."
     )
 
-    # Load models & data
     with st.spinner("Loading models and question bank..."):
         df_q = load_question_bank_and_embeddings()
         sbert = load_sbert()
         diff_clf = load_difficulty_model()
 
-    # ----- SIDEBAR: User info & control -----
+    # ----- SIDEBAR -----
     with st.sidebar:
         st.header("🧑‍🎓 Test Settings")
-
-        st.text_input(
-            "Student name",
-            key="student_name",
-            placeholder="Enter your name",
-        )
-        st.selectbox(
-            "Class level",
-            options=list(range(6, 13)),
-            key="class_level",
-        )
+        st.text_input("Student name", key="student_name", placeholder="Enter your name")
+        st.selectbox("Class level", options=list(range(6, 13)), key="class_level")
         st.number_input(
             "Number of questions in test",
             min_value=5,
@@ -221,22 +228,18 @@ def main():
             else:
                 st.warning("Please enter a question first.")
 
-    # ----- MAIN PANEL: Test flow -----
-
-    # Show summary if finished
+    # ----- MAIN PANEL -----
     if st.session_state.test_finished:
         show_summary(df_q)
         return
 
-    # If test not started yet
     if not st.session_state.test_started:
-        st.info("Set your name, class, and click **Start / Restart Test** in the sidebar to begin.")
+        st.info("Set your name and class, then click **Start / Restart Test** in the sidebar to begin.")
         return
 
-    # There is an active test
     qid = st.session_state.current_qid
     if qid is None:
-        st.error("No current question. Click 'Start / Restart Test' to begin.")
+        st.error("No current question. Click 'Start / Restart Test' in the sidebar.")
         return
 
     row = df_q.loc[qid]
@@ -265,14 +268,12 @@ def main():
                 is_correct, sim = evaluate_answer(ans.strip(), row["answer"], sbert)
                 st.session_state.num_attempted += 1
                 if is_correct:
-                    st.session_state.score += 1
                     st.success(f"Correct! (similarity: {sim:.2f})")
                 else:
                     st.error(f"Not quite. (similarity: {sim:.2f})")
                     with st.expander("Show reference answer"):
                         st.write(row["answer"])
 
-                # Save history
                 st.session_state.history.append(
                     {
                         "qid": int(qid),
@@ -283,7 +284,6 @@ def main():
                     }
                 )
 
-                # Decide next question or finish
                 if st.session_state.num_attempted >= st.session_state.num_questions:
                     finish_test()
                     st.experimental_rerun()
@@ -306,15 +306,11 @@ def main():
         st.subheader("📈 Live Stats")
         attempted = st.session_state.num_attempted
         score = st.session_state.score
-        if attempted > 0:
-            acc = 100.0 * score / attempted
-        else:
-            acc = 0.0
+        acc = 100.0 * score / attempted if attempted > 0 else 0.0
         st.metric("Questions attempted", attempted)
         st.metric("Score", score)
         st.metric("Accuracy (%)", f"{acc:.1f}")
 
-        # difficulty-wise performance
         if st.session_state.history:
             hist_df = pd.DataFrame(st.session_state.history)
             st.markdown("##### Performance by difficulty")
@@ -332,10 +328,7 @@ def show_summary(df_q: pd.DataFrame):
 
     score = st.session_state.score
     attempted = st.session_state.num_attempted
-    if attempted > 0:
-        acc = 100.0 * score / attempted
-    else:
-        acc = 0.0
+    acc = 100.0 * score / attempted if attempted > 0 else 0.0
 
     st.markdown(f"**Student:** {st.session_state.student_name}")
     st.markdown(f"**Class:** {st.session_state.class_level}")
