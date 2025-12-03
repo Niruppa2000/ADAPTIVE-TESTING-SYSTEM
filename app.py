@@ -1,4 +1,5 @@
 import os
+import random
 from pathlib import Path
 
 import streamlit as st
@@ -31,15 +32,14 @@ def load_sbert():
     """
     Load fine-tuned SBERT model if available.
     If missing or corrupted → fall back to a base Sentence-BERT model.
-    Prevents Streamlit OSError crashes.
     """
     try:
         if SBERT_PATH.exists() and any(SBERT_PATH.iterdir()):
-            st.info(f"Loading fine-tuned SBERT from `{SBERT_PATH}`")
+            st.info(f"Loading fine-tuned SBERT from {SBERT_PATH}")
             return SentenceTransformer(str(SBERT_PATH), local_files_only=True)
         else:
             st.warning(
-                f"Fine-tuned SBERT folder not found at `{SBERT_PATH}`.\n"
+                f"Fine-tuned SBERT folder not found at {SBERT_PATH}.\n"
                 "Using fallback base model: sentence-transformers/all-MiniLM-L6-v2"
             )
     except Exception:
@@ -66,10 +66,13 @@ def load_difficulty_model():
 
 @st.cache_resource
 def load_question_bank_and_embeddings():
+    """
+    Load question bank and pre-compute question embeddings.
+    """
     if not QUESTION_BANK_PATH.exists():
         st.error(
-            f"`question_bank.parquet` missing at `{QUESTION_BANK_PATH}`.\n\n"
-            "Upload it to your GitHub repo under `/data/`."
+            f"`question_bank.parquet` missing at {QUESTION_BANK_PATH}.\n\n"
+            "Upload it to your GitHub repo under `data/`."
         )
         st.stop()
 
@@ -125,6 +128,10 @@ def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
 
 
 def evaluate_answer(student_answer, correct_answer, sbert, threshold=0.6):
+    """
+    Compute SBERT cosine similarity between student answer and reference answer.
+    Used for logging / analysis even in MCQ mode.
+    """
     v1 = sbert.encode([student_answer], convert_to_numpy=True)[0]
     v2 = sbert.encode([correct_answer], convert_to_numpy=True)[0]
 
@@ -143,7 +150,38 @@ def predict_difficulty(question, sbert, clf):
 
 
 # ------------------------------
-# SESSION STATE SETUP
+# MCQ OPTION GENERATION
+# ------------------------------
+def generate_mcq_options(df: pd.DataFrame, qid: int, num_options: int = 4):
+    """
+    Build MCQ options for a given question:
+    - 1 correct option (reference answer)
+    - num_options-1 distractors from other answers (prefer same source_pdf)
+    """
+    correct = df.loc[qid, "answer"]
+    source = df.loc[qid].get("source_pdf", None)
+
+    # Candidate pool for distractors
+    if source is not None and "source_pdf" in df.columns:
+        pool = df[(df.index != qid) & (df["source_pdf"] == source)]
+    else:
+        pool = df[df.index != qid]
+
+    if len(pool) == 0:
+        distractors = []
+    else:
+        distractors = pool["answer"].sample(
+            min(num_options - 1, len(pool)),
+            replace=False
+        ).tolist()
+
+    options = distractors + [correct]
+    random.shuffle(options)
+    return options, correct
+
+
+# ------------------------------
+# SESSION STATE
 # ------------------------------
 def init_state():
     if "initialized" not in st.session_state:
@@ -202,109 +240,6 @@ def main():
         st.number_input("Number of Questions", 5, 30, 10, key="num_questions")
 
         if st.button("Start Test / Restart"):
-            start_test(df_q)
-
-        if st.button("Finish Test"):
-            finish_test()
-
-        st.markdown("---")
-        st.subheader("🔍 Test Custom Question Difficulty")
-
-        custom_q = st.text_area("Enter a question")
-        if st.button("Predict Difficulty"):
-            if custom_q.strip():
-                diff = predict_difficulty(custom_q, sbert, diff_clf)
-                st.success(f"Predicted Difficulty: **{diff.upper()}**")
-            else:
-                st.warning("Enter a question first.")
-
-    # MAIN CONTENT
-    if st.session_state.test_finished:
-        show_summary(df_q)
-        return
-
-    if not st.session_state.test_started:
-        st.info("Enter your name and class level, then click 'Start Test'.")
-        return
-
-    qid = st.session_state.current_qid
-    row = df_q.loc[qid]
-
-    st.subheader(
-        f"Question {st.session_state.num_attempted + 1} of {st.session_state.num_questions}"
-    )
-    st.markdown(f"**Difficulty:** `{row['difficulty']}`")
-
-    st.markdown("### Context")
-    st.write(row["context"])
-
-    st.markdown("### Question")
-    st.write(row["question"])
-
-    with st.form("answer_form", clear_on_submit=True):
-        ans = st.text_area("Your answer", height=120)
-        submitted = st.form_submit_button("Submit Answer")
-
-    if submitted:
-        if not ans.strip():
-            st.warning("Please enter an answer.")
-            return
-
-        is_correct, sim = evaluate_answer(ans, row["answer"], sbert)
-        st.session_state.num_attempted += 1
-
-        if is_correct:
-            st.success(f"Correct! (Similarity {sim:.2f})")
-            st.session_state.score += 1
-        else:
-            st.error(f"Incorrect (Similarity {sim:.2f})")
-            with st.expander("Show Correct Answer"):
-                st.write(row["answer"])
-
-        st.session_state.history.append(
-            {
-                "qid": qid,
-                "difficulty": row["difficulty"],
-                "correct": is_correct,
-                "similarity": sim,
-            }
-        )
-
-        if st.session_state.num_attempted >= st.session_state.num_questions:
-            finish_test()
-            st.experimental_rerun()
-
-        next_qid = choose_next_question(
-            df_q, is_correct, row["diff_id"], st.session_state.asked_ids
-        )
-        if next_qid is None:
-            finish_test()
-        else:
-            st.session_state.current_qid = next_qid
-            st.session_state.asked_ids.append(next_qid)
-
-        st.experimental_rerun()
-
-
-# ------------------------------
-# SUMMARY PAGE
-# ------------------------------
-def show_summary(df_q):
-    st.header("📊 Test Summary")
-
-    score = st.session_state.score
-    attempted = st.session_state.num_attempted
-    acc = (score / attempted) * 100 if attempted else 0
-
-    st.metric("Total Questions Attempted", attempted)
-    st.metric("Correct Answers", score)
-    st.metric("Accuracy", f"{acc:.2f}%")
-
-    st.subheader("Detailed Answer Breakdown")
-    hist = pd.DataFrame(st.session_state.history)
-    st.dataframe(hist)
-
-
-if __name__ == "__main__":
-    main()
-
+            if not st.session_state.student_name or st.session_state.class_level is None:
+                st.warning("Please enter your name and class level first.")
+            els
