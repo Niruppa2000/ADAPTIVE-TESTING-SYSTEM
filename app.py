@@ -198,6 +198,15 @@ def init_state():
         st.session_state.test_finished = False
         st.session_state.history = []
 
+        # For stable MCQ options per question
+        st.session_state.current_options = None
+        st.session_state.current_correct_option = None
+
+
+def reset_current_options():
+    st.session_state.current_options = None
+    st.session_state.current_correct_option = None
+
 
 def start_test(df):
     st.session_state.score = 0
@@ -211,11 +220,13 @@ def start_test(df):
     qid = choose_initial_question(df, st.session_state.class_level, [])
     st.session_state.current_qid = qid
     st.session_state.asked_ids.append(qid)
+    reset_current_options()
 
 
 def finish_test():
     st.session_state.test_finished = True
     st.session_state.test_started = False
+    reset_current_options()
 
 
 # ------------------------------
@@ -282,14 +293,21 @@ def main():
     st.markdown("### Question")
     st.write(row["question"])
 
-    # ---- MCQ options ----
-    options, correct_option = generate_mcq_options(df_q, qid)
+    # ---- MCQ options (stable for this question) ----
+    if st.session_state.current_options is None or st.session_state.current_correct_option is None:
+        options, correct_option = generate_mcq_options(df_q, qid)
+        st.session_state.current_options = options
+        st.session_state.current_correct_option = correct_option
+
+    options = st.session_state.current_options
+    correct_option = st.session_state.current_correct_option
 
     with st.form("answer_form", clear_on_submit=True):
         selected = st.radio(
             "Choose the correct answer:",
             options,
             index=None,
+            key=f"q_radio_{qid}",
         )
         submitted = st.form_submit_button("Submit Answer")
 
@@ -325,7 +343,7 @@ def main():
             }
         )
 
-        # Decide next question / finish
+        # Prepare for next question
         if st.session_state.num_attempted >= st.session_state.num_questions:
             finish_test()
             st.experimental_rerun()
@@ -339,6 +357,7 @@ def main():
             else:
                 st.session_state.current_qid = next_qid
                 st.session_state.asked_ids.append(next_qid)
+                reset_current_options()
                 st.experimental_rerun()
 
 
