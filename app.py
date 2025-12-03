@@ -1,12 +1,11 @@
-import os
 import random
 from pathlib import Path
 
-import streamlit as st
-import pandas as pd
 import numpy as np
-from sentence_transformers import SentenceTransformer
+import pandas as pd
+import streamlit as st
 import joblib
+from sentence_transformers import SentenceTransformer
 
 
 # ------------------------------
@@ -29,10 +28,7 @@ INV_DIFF_MAP = {v: k for k, v in DIFF_MAP.items()}
 # ------------------------------
 @st.cache_resource
 def load_sbert():
-    """
-    Load fine-tuned SBERT model if available.
-    If missing or corrupted → fall back to base Sentence-BERT model.
-    """
+    """Load fine-tuned SBERT if present, else base MiniLM."""
     try:
         if SBERT_PATH.exists() and any(SBERT_PATH.iterdir()):
             st.info(f"Loading fine-tuned SBERT from {SBERT_PATH}")
@@ -56,7 +52,6 @@ def load_difficulty_model():
     if not DIFF_MODEL_PATH.exists():
         st.warning("⚠ Difficulty classifier not found. Predictions disabled.")
         return None
-
     try:
         return joblib.load(DIFF_MODEL_PATH)
     except Exception:
@@ -64,11 +59,26 @@ def load_difficulty_model():
         return None
 
 
+def _quality_filter(df: pd.DataFrame) -> pd.DataFrame:
+    """Drop obviously bad questions/answers (too short/long, no '?', etc.)."""
+    q_words = df["question"].astype(str).str.split().str.len()
+    a_words = df["answer"].astype(str).str.split().str.len()
+
+    mask = (
+        (q_words >= 5)
+        & (q_words <= 30)
+        & df["question"].str.contains(r"\?", regex=True)
+        & (a_words >= 2)
+        & (a_words <= 40)
+    )
+    df = df[mask].copy()
+    df.reset_index(drop=True, inplace=True)
+    return df
+
+
 @st.cache_resource
 def load_question_bank_and_embeddings():
-    """
-    Load question bank and pre-compute question embeddings.
-    """
+    """Load, clean, and embed the question bank."""
     if not QUESTION_BANK_PATH.exists():
         st.error(
             f"`question_bank.parquet` missing at {QUESTION_BANK_PATH}.\n\n"
@@ -82,19 +92,27 @@ def load_question_bank_and_embeddings():
         st.error("Parquet file must include a `difficulty` column.")
         st.stop()
 
+    df = _quality_filter(df)
     df["diff_id"] = df["difficulty"].map(DIFF_MAP)
 
     sbert = load_sbert()
 
-    st.write("📐 Embedding questions…")
+    st.write("📐 Embedding questions and answers for semantic MCQs…")
     q_embs = sbert.encode(
         df["question"].tolist(),
         batch_size=64,
         convert_to_numpy=True,
         show_progress_bar=False,
     )
+    a_embs = sbert.encode(
+        df["answer"].tolist(),
+        batch_size=64,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
 
     df["q_emb"] = list(q_embs)
+    df["a_emb"] = list(a_embs)
     return df
 
 
@@ -104,10 +122,8 @@ def load_question_bank_and_embeddings():
 def choose_initial_question(df, class_level, asked_ids):
     candidates = df[df["difficulty"] == "medium"]
     candidates = candidates[~candidates.index.isin(asked_ids)]
-
     if candidates.empty:
         candidates = df[~df.index.isin(asked_ids)]
-
     return int(candidates.sample(1).index[0])
 
 
@@ -120,7 +136,6 @@ def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
 
     if candidates.empty:
         candidates = df[~df.index.isin(asked_ids)]
-
     if candidates.empty:
         return None
 
@@ -128,10 +143,6 @@ def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
 
 
 def evaluate_answer(student_answer, correct_answer, sbert, threshold=0.6):
-    """
-    Compute SBERT cosine similarity between student answer and reference answer.
-    Used for logging / analysis even in MCQ mode.
-    """
     v1 = sbert.encode([student_answer], convert_to_numpy=True)[0]
     v2 = sbert.encode([correct_answer], convert_to_numpy=True)[0]
 
@@ -143,37 +154,67 @@ def evaluate_answer(student_answer, correct_answer, sbert, threshold=0.6):
 def predict_difficulty(question, sbert, clf):
     if clf is None:
         return "unknown"
-
     emb = sbert.encode([question], convert_to_numpy=True)
     label = int(clf.predict(emb)[0])
     return INV_DIFF_MAP[label]
 
 
 # ------------------------------
-# MCQ OPTION GENERATION
+# MCQ OPTION GENERATION (SEMANTIC)
 # ------------------------------
 def generate_mcq_options(df: pd.DataFrame, qid: int, num_options: int = 4):
     """
-    Build MCQ options for a given question:
-    - 1 correct option (reference answer)
-    - num_options-1 distractors from other answers (prefer same source_pdf)
+    Generate MCQ options:
+      - 1 correct answer (reference answer)
+      - num_options-1 distractors chosen by semantic similarity:
+        * same book (source_pdf) if available
+        * questions whose embeddings are similar to this question
+        * so all options are topically related
     """
     correct = df.loc[qid, "answer"]
+    q_vec = np.array(df.loc[qid, "q_emb"])
     source = df.loc[qid].get("source_pdf", None)
 
-    # Candidate pool for distractors
+    # candidate pool (exclude self)
+    cand_df = df[df.index != qid]
     if source is not None and "source_pdf" in df.columns:
-        pool = df[(df.index != qid) & (df["source_pdf"] == source)]
-    else:
-        pool = df[df.index != qid]
+        cand_df = cand_df[cand_df["source_pdf"] == source]
 
-    if len(pool) == 0:
-        distractors = []
-    else:
-        distractors = pool["answer"].sample(
-            min(num_options - 1, len(pool)),
-            replace=False
-        ).tolist()
+    if cand_df.empty:
+        cand_df = df[df.index != qid]
+
+    if cand_df.empty:
+        # fallback: just return correct answer
+        return [correct], correct
+
+    cand_q = np.vstack(cand_df["q_emb"].to_numpy())
+    denom = np.linalg.norm(cand_q, axis=1) * (np.linalg.norm(q_vec) + 1e-8)
+    sims = (cand_q @ q_vec) / (denom + 1e-8)
+    cand_df = cand_df.assign(sim_q=sims)
+
+    # Prefer moderately similar questions (same topic but not identical)
+    filtered = cand_df[(cand_df["sim_q"] >= 0.35) & (cand_df["sim_q"] <= 0.9)]
+    if len(filtered) < num_options - 1:
+        filtered = cand_df  # relax if not enough
+
+    # Sort by similarity and pick top distractors
+    filtered = filtered.sort_values("sim_q", ascending=False)
+    distractors = []
+    for _, row in filtered.iterrows():
+        ans = row["answer"]
+        if ans.strip() == correct.strip():
+            continue
+        if ans not in distractors:
+            distractors.append(ans)
+        if len(distractors) >= num_options - 1:
+            break
+
+    # If still not enough, sample random remaining answers
+    if len(distractors) < num_options - 1:
+        remaining = [a for a in cand_df["answer"].tolist()
+                     if a not in distractors and a.strip() != correct.strip()]
+        random.shuffle(remaining)
+        distractors.extend(remaining[: (num_options - 1 - len(distractors))])
 
     options = distractors + [correct]
     random.shuffle(options)
@@ -198,7 +239,6 @@ def init_state():
         st.session_state.test_finished = False
         st.session_state.history = []
 
-        # For stable MCQ options per question
         st.session_state.current_options = None
         st.session_state.current_correct_option = None
 
@@ -333,7 +373,6 @@ def main():
             with st.expander("Show Correct Answer"):
                 st.write(row["answer"])
 
-        # Save history
         st.session_state.history.append(
             {
                 "qid": int(qid),
@@ -345,7 +384,7 @@ def main():
             }
         )
 
-        # Prepare for next question
+        # Next question / finish
         if st.session_state.num_attempted >= st.session_state.num_questions:
             finish_test()
             st.rerun()
