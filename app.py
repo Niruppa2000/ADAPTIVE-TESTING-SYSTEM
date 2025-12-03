@@ -242,4 +242,125 @@ def main():
         if st.button("Start Test / Restart"):
             if not st.session_state.student_name or st.session_state.class_level is None:
                 st.warning("Please enter your name and class level first.")
-            els
+            else:
+                start_test(df_q)
+
+        if st.button("Finish Test"):
+            finish_test()
+
+        st.markdown("---")
+        st.subheader("🔍 Test Custom Question Difficulty")
+
+        custom_q = st.text_area("Enter a question")
+        if st.button("Predict Difficulty"):
+            if custom_q.strip():
+                diff = predict_difficulty(custom_q, sbert, diff_clf)
+                st.success(f"Predicted Difficulty: **{diff.upper()}**")
+            else:
+                st.warning("Enter a question first.")
+
+    # MAIN CONTENT
+    if st.session_state.test_finished:
+        show_summary(df_q)
+        return
+
+    if not st.session_state.test_started:
+        st.info("Enter your name and class level, then click **Start Test**.")
+        return
+
+    qid = st.session_state.current_qid
+    row = df_q.loc[qid]
+
+    st.subheader(
+        f"Question {st.session_state.num_attempted + 1} of {st.session_state.num_questions}"
+    )
+    st.markdown(f"**Difficulty:** `{row['difficulty']}`")
+
+    st.markdown("### Context")
+    st.write(row["context"])
+
+    st.markdown("### Question")
+    st.write(row["question"])
+
+    # ---- MCQ options ----
+    options, correct_option = generate_mcq_options(df_q, qid)
+
+    with st.form("answer_form", clear_on_submit=True):
+        selected = st.radio(
+            "Choose the correct answer:",
+            options,
+            index=None,
+        )
+        submitted = st.form_submit_button("Submit Answer")
+
+    if submitted:
+        if selected is None:
+            st.warning("Please select an option.")
+            return
+
+        # MCQ correctness
+        is_correct = (selected == correct_option)
+        # For logging: semantic similarity between chosen option and reference answer
+        _, sim = evaluate_answer(selected, row["answer"], sbert)
+
+        st.session_state.num_attempted += 1
+
+        if is_correct:
+            st.success(f"✅ Correct! (Similarity {sim:.2f})")
+            st.session_state.score += 1
+        else:
+            st.error(f"❌ Incorrect. (Similarity {sim:.2f})")
+            with st.expander("Show Correct Answer"):
+                st.write(row["answer"])
+
+        # Save history
+        st.session_state.history.append(
+            {
+                "qid": int(qid),
+                "difficulty": row["difficulty"],
+                "correct": bool(is_correct),
+                "similarity": float(sim),
+                "chosen_option": selected,
+                "correct_option": correct_option,
+            }
+        )
+
+        # Decide next question / finish
+        if st.session_state.num_attempted >= st.session_state.num_questions:
+            finish_test()
+            st.experimental_rerun()
+        else:
+            next_qid = choose_next_question(
+                df_q, is_correct, int(row["diff_id"]), st.session_state.asked_ids
+            )
+            if next_qid is None:
+                finish_test()
+                st.experimental_rerun()
+            else:
+                st.session_state.current_qid = next_qid
+                st.session_state.asked_ids.append(next_qid)
+                st.experimental_rerun()
+
+
+# ------------------------------
+# SUMMARY PAGE
+# ------------------------------
+def show_summary(df_q):
+    st.header("📊 Test Summary")
+
+    score = st.session_state.score
+    attempted = st.session_state.num_attempted
+    acc = (score / attempted) * 100 if attempted else 0
+
+    st.metric("Total Questions Attempted", attempted)
+    st.metric("Correct Answers", score)
+    st.metric("Accuracy", f"{acc:.2f}%")
+
+    if st.session_state.history:
+        st.subheader("Detailed Answer Breakdown")
+        hist = pd.DataFrame(st.session_state.history)
+        st.dataframe(hist)
+
+
+if __name__ == "__main__":
+    main()
