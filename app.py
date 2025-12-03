@@ -31,7 +31,7 @@ INV_DIFF_MAP = {v: k for k, v in DIFF_MAP.items()}
 def load_sbert():
     """
     Load fine-tuned SBERT model if available.
-    If missing or corrupted → fall back to a base Sentence-BERT model.
+    If missing or corrupted → fall back to base Sentence-BERT model.
     """
     try:
         if SBERT_PATH.exists() and any(SBERT_PATH.iterdir()):
@@ -255,9 +255,11 @@ def main():
                 st.warning("Please enter your name and class level first.")
             else:
                 start_test(df_q)
+                st.rerun()
 
         if st.button("Finish Test"):
             finish_test()
+            st.rerun()
 
         st.markdown("---")
         st.subheader("🔍 Test Custom Question Difficulty")
@@ -346,19 +348,19 @@ def main():
         # Prepare for next question
         if st.session_state.num_attempted >= st.session_state.num_questions:
             finish_test()
-            st.experimental_rerun()
+            st.rerun()
         else:
             next_qid = choose_next_question(
                 df_q, is_correct, int(row["diff_id"]), st.session_state.asked_ids
             )
             if next_qid is None:
                 finish_test()
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.session_state.current_qid = next_qid
                 st.session_state.asked_ids.append(next_qid)
                 reset_current_options()
-                st.experimental_rerun()
+                st.rerun()
 
 
 # ------------------------------
