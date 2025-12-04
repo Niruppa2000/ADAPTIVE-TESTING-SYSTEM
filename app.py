@@ -1,3 +1,4 @@
+import random
 from pathlib import Path
 
 import numpy as np
@@ -27,10 +28,7 @@ INV_DIFF_MAP = {v: k for k, v in DIFF_MAP.items()}
 # ------------------------------
 @st.cache_resource
 def load_sbert():
-    """
-    Load fine-tuned SBERT model if available.
-    If missing or corrupted → fall back to base Sentence-BERT model.
-    """
+    """Load fine-tuned SBERT if present, else base MiniLM."""
     try:
         if SBERT_PATH.exists() and any(SBERT_PATH.iterdir()):
             st.info(f"Loading fine-tuned SBERT from {SBERT_PATH}")
@@ -51,7 +49,6 @@ def load_sbert():
 
 @st.cache_resource
 def load_difficulty_model():
-    """Load RandomForest difficulty classifier if present."""
     if not DIFF_MODEL_PATH.exists():
         st.warning("⚠ Difficulty classifier not found. Predictions disabled.")
         return None
@@ -63,13 +60,7 @@ def load_difficulty_model():
 
 
 def _quality_filter(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Drop obviously bad questions/answers:
-    - question length 5–30 words
-    - contains '?'
-    - answer length 2–40 words
-    """
-    df = df.copy()
+    """Drop obviously bad questions/answers (too short/long, no '?', etc.)."""
     q_words = df["question"].astype(str).str.split().str.len()
     a_words = df["answer"].astype(str).str.split().str.len()
 
@@ -80,23 +71,14 @@ def _quality_filter(df: pd.DataFrame) -> pd.DataFrame:
         & (a_words >= 2)
         & (a_words <= 40)
     )
-    df = df[mask]
-    df = df.reset_index(drop=True)
+    df = df[mask].copy()
+    df.reset_index(drop=True, inplace=True)
     return df
 
 
 @st.cache_resource
-def load_question_bank():
-    """
-    Load and clean the question bank.
-
-    Each row should have:
-      - context  (paragraph from NCERT)
-      - question (one-line question)
-      - answer   (reference answer)
-      - difficulty ('easy'/'medium'/'hard')
-      - source_pdf (optional)
-    """
+def load_question_bank_and_embeddings():
+    """Load, clean, and embed the question bank."""
     if not QUESTION_BANK_PATH.exists():
         st.error(
             f"`question_bank.parquet` missing at {QUESTION_BANK_PATH}.\n\n"
@@ -106,16 +88,31 @@ def load_question_bank():
 
     df = pd.read_parquet(QUESTION_BANK_PATH)
 
-    required_cols = {"context", "question", "answer", "difficulty"}
-    if not required_cols.issubset(set(df.columns)):
-        st.error(
-            f"Parquet file must contain columns: {required_cols}. "
-            f"Found: {list(df.columns)}"
-        )
+    if "difficulty" not in df.columns:
+        st.error("Parquet file must include a `difficulty` column.")
         st.stop()
 
     df = _quality_filter(df)
     df["diff_id"] = df["difficulty"].map(DIFF_MAP)
+
+    sbert = load_sbert()
+
+    st.write("📐 Embedding questions and answers for semantic MCQs…")
+    q_embs = sbert.encode(
+        df["question"].tolist(),
+        batch_size=64,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+    a_embs = sbert.encode(
+        df["answer"].tolist(),
+        batch_size=64,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
+
+    df["q_emb"] = list(q_embs)
+    df["a_emb"] = list(a_embs)
     return df
 
 
@@ -123,7 +120,6 @@ def load_question_bank():
 # ADAPTIVE LOGIC
 # ------------------------------
 def choose_initial_question(df, class_level, asked_ids):
-    """Start with a medium question if possible."""
     candidates = df[df["difficulty"] == "medium"]
     candidates = candidates[~candidates.index.isin(asked_ids)]
     if candidates.empty:
@@ -132,10 +128,6 @@ def choose_initial_question(df, class_level, asked_ids):
 
 
 def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
-    """
-    If correct → go harder; if wrong → go easier.
-    Always avoid repeating already asked questions.
-    """
     target = prev_diff_id + 1 if prev_correct else prev_diff_id - 1
     target = max(0, min(2, target))
 
@@ -144,7 +136,6 @@ def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
 
     if candidates.empty:
         candidates = df[~df.index.isin(asked_ids)]
-
     if candidates.empty:
         return None
 
@@ -152,9 +143,6 @@ def choose_next_question(df, prev_correct, prev_diff_id, asked_ids):
 
 
 def evaluate_answer(student_answer, correct_answer, sbert, threshold=0.6):
-    """
-    Compare student answer to reference answer using SBERT cosine similarity.
-    """
     v1 = sbert.encode([student_answer], convert_to_numpy=True)[0]
     v2 = sbert.encode([correct_answer], convert_to_numpy=True)[0]
 
@@ -169,6 +157,68 @@ def predict_difficulty(question, sbert, clf):
     emb = sbert.encode([question], convert_to_numpy=True)
     label = int(clf.predict(emb)[0])
     return INV_DIFF_MAP[label]
+
+
+# ------------------------------
+# MCQ OPTION GENERATION (SEMANTIC)
+# ------------------------------
+def generate_mcq_options(df: pd.DataFrame, qid: int, num_options: int = 4):
+    """
+    Generate MCQ options:
+      - 1 correct answer (reference answer)
+      - num_options-1 distractors chosen by semantic similarity:
+        * same book (source_pdf) if available
+        * questions whose embeddings are similar to this question
+        * so all options are topically related
+    """
+    correct = df.loc[qid, "answer"]
+    q_vec = np.array(df.loc[qid, "q_emb"])
+    source = df.loc[qid].get("source_pdf", None)
+
+    # candidate pool (exclude self)
+    cand_df = df[df.index != qid]
+    if source is not None and "source_pdf" in df.columns:
+        cand_df = cand_df[cand_df["source_pdf"] == source]
+
+    if cand_df.empty:
+        cand_df = df[df.index != qid]
+
+    if cand_df.empty:
+        # fallback: just return correct answer
+        return [correct], correct
+
+    cand_q = np.vstack(cand_df["q_emb"].to_numpy())
+    denom = np.linalg.norm(cand_q, axis=1) * (np.linalg.norm(q_vec) + 1e-8)
+    sims = (cand_q @ q_vec) / (denom + 1e-8)
+    cand_df = cand_df.assign(sim_q=sims)
+
+    # Prefer moderately similar questions (same topic but not identical)
+    filtered = cand_df[(cand_df["sim_q"] >= 0.35) & (cand_df["sim_q"] <= 0.9)]
+    if len(filtered) < num_options - 1:
+        filtered = cand_df  # relax if not enough
+
+    # Sort by similarity and pick top distractors
+    filtered = filtered.sort_values("sim_q", ascending=False)
+    distractors = []
+    for _, row in filtered.iterrows():
+        ans = row["answer"]
+        if ans.strip() == correct.strip():
+            continue
+        if ans not in distractors:
+            distractors.append(ans)
+        if len(distractors) >= num_options - 1:
+            break
+
+    # If still not enough, sample random remaining answers
+    if len(distractors) < num_options - 1:
+        remaining = [a for a in cand_df["answer"].tolist()
+                     if a not in distractors and a.strip() != correct.strip()]
+        random.shuffle(remaining)
+        distractors.extend(remaining[: (num_options - 1 - len(distractors))])
+
+    options = distractors + [correct]
+    random.shuffle(options)
+    return options, correct
 
 
 # ------------------------------
@@ -189,6 +239,14 @@ def init_state():
         st.session_state.test_finished = False
         st.session_state.history = []
 
+        st.session_state.current_options = None
+        st.session_state.current_correct_option = None
+
+
+def reset_current_options():
+    st.session_state.current_options = None
+    st.session_state.current_correct_option = None
+
 
 def start_test(df):
     st.session_state.score = 0
@@ -202,11 +260,13 @@ def start_test(df):
     qid = choose_initial_question(df, st.session_state.class_level, [])
     st.session_state.current_qid = qid
     st.session_state.asked_ids.append(qid)
+    reset_current_options()
 
 
 def finish_test():
     st.session_state.test_finished = True
     st.session_state.test_started = False
+    reset_current_options()
 
 
 # ------------------------------
@@ -219,7 +279,7 @@ def main():
     st.title("📘 AI-Powered Adaptive Testing System (NCERT Social Science)")
 
     with st.spinner("Loading models and question bank…"):
-        df_q = load_question_bank()
+        df_q = load_question_bank_and_embeddings()
         sbert = load_sbert()
         diff_clf = load_difficulty_model()
 
@@ -254,7 +314,7 @@ def main():
 
     # MAIN CONTENT
     if st.session_state.test_finished:
-        show_summary()
+        show_summary(df_q)
         return
 
     if not st.session_state.test_started:
@@ -273,42 +333,58 @@ def main():
     st.write(row["context"])
 
     st.markdown("### Question")
-    # enforce one-line display visually (question text itself already filtered)
-    st.write(row["question"].strip())
+    st.write(row["question"])
+
+    # ---- MCQ options (stable for this question) ----
+    if st.session_state.current_options is None or st.session_state.current_correct_option is None:
+        options, correct_option = generate_mcq_options(df_q, qid)
+        st.session_state.current_options = options
+        st.session_state.current_correct_option = correct_option
+
+    options = st.session_state.current_options
+    correct_option = st.session_state.current_correct_option
 
     with st.form("answer_form", clear_on_submit=True):
-        ans = st.text_area("Your answer", height=140)
+        selected = st.radio(
+            "Choose the correct answer:",
+            options,
+            index=None,
+            key=f"q_radio_{qid}",
+        )
         submitted = st.form_submit_button("Submit Answer")
 
     if submitted:
-        if not ans.strip():
-            st.warning("Please type an answer before submitting.")
+        if selected is None:
+            st.warning("Please select an option.")
             return
 
-        is_correct, sim = evaluate_answer(ans.strip(), row["answer"], sbert)
+        # MCQ correctness
+        is_correct = (selected == correct_option)
+        # For logging: semantic similarity between chosen option and reference answer
+        _, sim = evaluate_answer(selected, row["answer"], sbert)
+
         st.session_state.num_attempted += 1
 
         if is_correct:
             st.success(f"✅ Correct! (Similarity {sim:.2f})")
             st.session_state.score += 1
         else:
-            st.error(f"❌ Not quite. (Similarity {sim:.2f})")
-            with st.expander("Show reference answer"):
+            st.error(f"❌ Incorrect. (Similarity {sim:.2f})")
+            with st.expander("Show Correct Answer"):
                 st.write(row["answer"])
 
-        # log history (for analysis / knowledge gaps)
         st.session_state.history.append(
             {
                 "qid": int(qid),
                 "difficulty": row["difficulty"],
                 "correct": bool(is_correct),
                 "similarity": float(sim),
-                "student_answer": ans.strip(),
-                "reference_answer": row["answer"],
+                "chosen_option": selected,
+                "correct_option": correct_option,
             }
         )
 
-        # always move to NEXT question, even if wrong
+        # Next question / finish
         if st.session_state.num_attempted >= st.session_state.num_questions:
             finish_test()
             st.rerun()
@@ -322,13 +398,14 @@ def main():
             else:
                 st.session_state.current_qid = next_qid
                 st.session_state.asked_ids.append(next_qid)
+                reset_current_options()
                 st.rerun()
 
 
 # ------------------------------
 # SUMMARY PAGE
 # ------------------------------
-def show_summary():
+def show_summary(df_q):
     st.header("📊 Test Summary")
 
     score = st.session_state.score
