@@ -3,7 +3,8 @@ import pandas as pd
 import random
 
 # CSV is in the same folder as app.py
-CSV_PATH = "NCERT_MCQs_with_difficulty_by_chapter.csv"
+# CSV is in the data/ folder
+CSV_PATH = "data/NCERT_MCQs_with_difficulty_by_chapter.csv"
 
 
 @st.cache_data
@@ -137,3 +138,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
