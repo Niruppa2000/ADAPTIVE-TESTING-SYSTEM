@@ -1,70 +1,68 @@
 import streamlit as st
 import pandas as pd
 import random
-import os
 
-# Path to your generated CSV inside the repo
-CSV_PATH = os.path.join("data", "NCERT_MCQs_with_difficulty_by_chapter.csv")
+# CSV is in the same folder as app.py
+CSV_PATH = "NCERT_MCQs_with_difficulty_by_chapter.csv"
 
 
 @st.cache_data
 def load_data():
     df = pd.read_csv(CSV_PATH)
-    # Ensure class is string
+    # Normalise some columns
     df["class"] = df["class"].astype(str)
-    # Fill any missing chapter names to avoid issues
     df["chapter"] = df["chapter"].fillna("Unknown Chapter")
     df["difficulty"] = df["difficulty"].fillna("Medium")
+    # Strip whitespace from answer column just in case
+    df["answer"] = df["answer"].astype(str).str.strip().str.upper()
     return df
 
 
 def main():
     st.title("NCERT MCQ Practice (Classes 6–10)")
     st.write(
-        "MCQs auto-generated from NCERT (Classes 6–10) using a RAG pipeline with FLAN-T5 "
-        "and Sentence-BERT. This app lets you practice and track your performance."
+        "MCQs loaded from `NCERT_MCQs_with_difficulty_by_chapter.csv`.\n\n"
+        "Filter by class, chapter, and difficulty, then practice and see your performance."
     )
 
-    # Load data
     df = load_data()
 
-    # --- Sidebar Filters ---
+    # ---------- Sidebar Filters ----------
     st.sidebar.header("Filters")
 
-    class_options = ["All"] + sorted(df["class"].unique().tolist())
-    selected_class = st.sidebar.selectbox("Select Class", class_options)
+    class_opts = ["All"] + sorted(df["class"].unique().tolist())
+    sel_class = st.sidebar.selectbox("Class", class_opts)
 
-    filtered_df = df.copy()
-    if selected_class != "All":
-        filtered_df = filtered_df[filtered_df["class"] == selected_class]
+    filtered = df.copy()
+    if sel_class != "All":
+        filtered = filtered[filtered["class"] == sel_class]
 
-    chapter_options = ["All"] + sorted(filtered_df["chapter"].unique().tolist())
-    selected_chapter = st.sidebar.selectbox("Select Chapter", chapter_options)
+    chapter_opts = ["All"] + sorted(filtered["chapter"].unique().tolist())
+    sel_chapter = st.sidebar.selectbox("Chapter", chapter_opts)
 
-    if selected_chapter != "All":
-        filtered_df = filtered_df[filtered_df["chapter"] == selected_chapter]
+    if sel_chapter != "All":
+        filtered = filtered[filtered["chapter"] == sel_chapter]
 
-    difficulty_options = ["All", "Easy", "Medium", "Hard"]
-    selected_diff = st.sidebar.selectbox("Select Difficulty", difficulty_options)
+    diff_opts = ["All", "Easy", "Medium", "Hard"]
+    sel_diff = st.sidebar.selectbox("Difficulty", diff_opts)
 
-    if selected_diff != "All":
-        filtered_df = filtered_df[filtered_df["difficulty"] == selected_diff]
+    if sel_diff != "All":
+        filtered = filtered[filtered["difficulty"] == sel_diff]
 
-    if filtered_df.empty:
-        st.warning("No questions match the current filters. Try changing filters.")
+    if filtered.empty:
+        st.warning("No questions match the current filters. Try changing the filters.")
         return
 
-    # --- Session State for Quiz ---
+    # ---------- Session State for Quiz ----------
     if "score" not in st.session_state:
         st.session_state.score = 0
     if "total" not in st.session_state:
         st.session_state.total = 0
     if "current_idx" not in st.session_state:
-        st.session_state.current_idx = random.randint(0, len(filtered_df) - 1)
+        st.session_state.current_idx = random.randint(0, len(filtered) - 1)
 
-    # --- Sidebar Performance Metrics ---
+    # ---------- Sidebar Performance ----------
     st.sidebar.header("Your Performance")
-
     if st.session_state.total > 0:
         acc = st.session_state.score / st.session_state.total
     else:
@@ -79,20 +77,22 @@ def main():
 
     st.sidebar.write(f"Questions answered: {st.session_state.total}")
     st.sidebar.write(f"Correct: {st.session_state.score}")
-    st.sidebar.write(f"Accuracy: {acc * 100:.1f}%")
+    st.sidebar.write(f"Accuracy: {acc*100:.1f}%")
     st.sidebar.write(f"Level: **{level}**")
 
-    # --- Display Current Question ---
-    q_row = filtered_df.iloc[st.session_state.current_idx]
+    # ---------- Current Question ----------
+    q_row = filtered.iloc[st.session_state.current_idx]
 
     st.subheader(f"Class {q_row['class']} | {q_row['chapter']}")
     st.markdown(f"**Q:** {q_row['question']}")
 
     options = ["A", "B", "C", "D"]
-    labels = [f"A. {q_row['A']}",
-              f"B. {q_row['B']}",
-              f"C. {q_row['C']}",
-              f"D. {q_row['D']}"]
+    labels = [
+        f"A. {q_row['A']}",
+        f"B. {q_row['B']}",
+        f"C. {q_row['C']}",
+        f"D. {q_row['D']}",
+    ]
 
     user_choice = st.radio(
         "Choose an option:",
@@ -101,38 +101,39 @@ def main():
         format_func=lambda x: labels[options.index(x)],
     )
 
+    # ---------- Submit Answer ----------
     if st.button("Submit"):
         st.session_state.total += 1
 
-# Normalise the stored answer letter
-       correct = str(q_row["answer"]).strip().upper()
+        # Normalise correct answer letter
+        correct = str(q_row["answer"]).strip().upper()
 
-# Map options safely
-     option_map = {
-       "A": q_row.get("A", ""),
-       "B": q_row.get("B", ""),
-       "C": q_row.get("C", ""),
-       "D": q_row.get("D", ""),
-}
+        # Map letters to text safely
+        option_map = {
+            "A": q_row.get("A", ""),
+            "B": q_row.get("B", ""),
+            "C": q_row.get("C", ""),
+            "D": q_row.get("D", ""),
+        }
+        correct_text = option_map.get(correct, "")
 
-      correct_text = option_map.get(correct, "")
+        if user_choice == correct:
+            st.session_state.score += 1
+            st.success(f"✅ Correct! ({correct}. {correct_text})")
+        else:
+            st.error(f"❌ Incorrect. Correct answer: {correct}. {correct_text}")
 
-if user_choice == correct:
-    st.session_state.score += 1
-    st.success(f"✅ Correct! ({correct}. {correct_text})")
-else:
-    st.error(f"❌ Incorrect. Correct answer: {correct}. {correct_text})")
+        st.info(f"Difficulty: **{q_row['difficulty']}**")
 
-        # Pick next question randomly from filtered set
-        st.session_state.current_idx = random.randint(0, len(filtered_df) - 1)
+        # Next random question under same filters
+        st.session_state.current_idx = random.randint(0, len(filtered) - 1)
         st.experimental_rerun()
 
-    # Optional: show sources used in generation
-    with st.expander("Show metadata for this question"):
+    # ---------- Optional Metadata ----------
+    with st.expander("Show question metadata"):
         st.write(f"Topic: {q_row.get('topic', '')}")
         st.write(f"Sources: {q_row.get('sources', '')}")
 
 
 if __name__ == "__main__":
     main()
-
