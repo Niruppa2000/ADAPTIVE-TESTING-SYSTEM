@@ -1,28 +1,31 @@
 import streamlit as st
 import pandas as pd
 import random
+import os
 
-# CSV is in the same folder as app.py
-# CSV is in the data/ folder
-CSV_PATH = "data/NCERT_MCQs_with_difficulty_by_chapter.csv"
+# ----- CSV PATH -----
+CSV_PATH = os.path.join("data", "NCERT_MCQs_with_difficulty_by_chapter.csv")
 
 
 @st.cache_data
 def load_data():
+    # Load CSV
     df = pd.read_csv(CSV_PATH)
+
     # Normalise some columns
     df["class"] = df["class"].astype(str)
     df["chapter"] = df["chapter"].fillna("Unknown Chapter")
     df["difficulty"] = df["difficulty"].fillna("Medium")
-    # Strip whitespace from answer column just in case
+    # Clean answer column: ensure A/B/C/D with no extra spaces
     df["answer"] = df["answer"].astype(str).str.strip().str.upper()
+
     return df
 
 
 def main():
     st.title("NCERT MCQ Practice (Classes 6–10)")
     st.write(
-        "MCQs loaded from `NCERT_MCQs_with_difficulty_by_chapter.csv`.\n\n"
+        "MCQs loaded from `data/NCERT_MCQs_with_difficulty_by_chapter.csv`.\n\n"
         "Filter by class, chapter, and difficulty, then practice and see your performance."
     )
 
@@ -54,7 +57,7 @@ def main():
         st.warning("No questions match the current filters. Try changing the filters.")
         return
 
-    # ---------- Session State for Quiz ----------
+    # ---------- Session State ----------
     if "score" not in st.session_state:
         st.session_state.score = 0
     if "total" not in st.session_state:
@@ -102,35 +105,35 @@ def main():
         format_func=lambda x: labels[options.index(x)],
     )
 
-    # ---------- Submit Answer ----------
+    # ---------- Submit ----------
     if st.button("Submit"):
         st.session_state.total += 1
 
-        # Normalise correct answer letter
-        correct = str(q_row["answer"]).strip().upper()
+        # Normalise answer letter
+        correct_letter = str(q_row["answer"]).strip().upper()
 
-        # Map letters to text safely
+        # Safe mapping from letter -> text
         option_map = {
             "A": q_row.get("A", ""),
             "B": q_row.get("B", ""),
             "C": q_row.get("C", ""),
             "D": q_row.get("D", ""),
         }
-        correct_text = option_map.get(correct, "")
+        correct_text = option_map.get(correct_letter, "")
 
-        if user_choice == correct:
+        if user_choice == correct_letter:
             st.session_state.score += 1
-            st.success(f"✅ Correct! ({correct}. {correct_text})")
+            st.success(f"✅ Correct! ({correct_letter}. {correct_text})")
         else:
-            st.error(f"❌ Incorrect. Correct answer: {correct}. {correct_text}")
+            st.error(f"❌ Incorrect. Correct answer: {correct_letter}. {correct_text}")
 
         st.info(f"Difficulty: **{q_row['difficulty']}**")
 
-        # Next random question under same filters
+        # Next question
         st.session_state.current_idx = random.randint(0, len(filtered) - 1)
-        st.experimental_rerun()
+        st.rerun()  # <-- updated from st.experimental_rerun()
 
-    # ---------- Optional Metadata ----------
+    # ---------- Optional: show metadata ----------
     with st.expander("Show question metadata"):
         st.write(f"Topic: {q_row.get('topic', '')}")
         st.write(f"Sources: {q_row.get('sources', '')}")
@@ -138,4 +141,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
