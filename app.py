@@ -103,15 +103,25 @@ def main():
 
     if st.button("Submit"):
         st.session_state.total += 1
-        correct = q_row["answer"]
 
-        if user_choice == correct:
-            st.session_state.score += 1
-            st.success(f"✅ Correct! ({correct}. {q_row[correct]})")
-        else:
-            st.error(f"❌ Incorrect. Correct answer: {correct}. {q_row[correct]}")
+# Normalise the stored answer letter
+       correct = str(q_row["answer"]).strip().upper()
 
-        st.info(f"Difficulty: **{q_row['difficulty']}**")
+# Map options safely
+     option_map = {
+       "A": q_row.get("A", ""),
+       "B": q_row.get("B", ""),
+       "C": q_row.get("C", ""),
+       "D": q_row.get("D", ""),
+}
+
+      correct_text = option_map.get(correct, "")
+
+if user_choice == correct:
+    st.session_state.score += 1
+    st.success(f"✅ Correct! ({correct}. {correct_text})")
+else:
+    st.error(f"❌ Incorrect. Correct answer: {correct}. {correct_text})")
 
         # Pick next question randomly from filtered set
         st.session_state.current_idx = random.randint(0, len(filtered_df) - 1)
@@ -125,3 +135,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
